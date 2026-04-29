@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>AI - Orb Fix V42</title>
+    
+    <style>
+        /* FONTES */
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Segoe+UI&display=swap');
+
+        /* FUNDO 100% TRANSPARENTE */
+        html, body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: transparent !important; 
+            font-family: 'Share Tech Mono', monospace; 
+            user-select: none; 
+        }
+
+        /* WEBCAM - CAMADA DE FUNDO (-1) */
+        #webcam {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            transform: scaleX(-1); /* ESPELHADO */
+            opacity: 1; 
+            z-index: -1; 
+            object-fit: cover;
+            display: block;
+        }
+
+        /* CANVAS - CAMADA DE EFEITOS (1) */
+        canvas {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 1; pointer-events: none;
+        }
+
+        /* HUD - CAMADA SUPERIOR (2) */
+        #hud-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 2;
+            padding: 20px; box-sizing: border-box;
+        }
+
+        .panel {
+            position: absolute;
+            border-left: 4px solid #00f3ff;
+            padding-left: 15px;
+            background: linear-gradient(90deg, rgba(0, 20, 30, 0.6) 0%, rgba(0,0,0,0) 100%);
+        }
+
+        .label { color: #00f3ff; font-size: 14px; letter-spacing: 2px; opacity: 0.8; margin-bottom: 2px; }
+        .value { font-size: 28px; letter-spacing: 1px; text-transform: uppercase; text-shadow: 0 0 10px rgba(0, 243, 255, 0.5); }
+        .sub { color: #aaa; font-size: 12px; margin-top: 5px; letter-spacing: 1px; }
+        .mt { margin-top: 15px; }
+
+        .cyan { color: #00f3ff; }
+        .pink { color: #ff0055; text-shadow: 0 0 15px #ff0055; }
+        .white { color: #fff; }
+
+        /* POSICIONAMENTO */
+        #tl-panel { top: 30px; left: 30px; }
+        #bl-panel { bottom: 30px; left: 30px; }
+        
+        #br-panel { 
+            position: absolute;
+            bottom: 20px; right: 20px; 
+            text-align: right; 
+            border-right: 4px solid #ff0055; 
+            padding-right: 15px;
+            background: linear-gradient(-90deg, rgba(30, 0, 10, 0.6) 0%, rgba(0,0,0,0) 100%);
+        }
+
+        /* TELA DE INÍCIO */
+        #start-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle at center, rgba(0, 0, 0, 0.95) 0%, #000 100%);
+            display: flex; justify-content: center; align-items: center; flex-direction: column;
+            z-index: 10; font-family: 'Segoe UI', sans-serif;
+        }
+        #start-screen h1 {
+            color: #00f3ff; font-size: 3.5em; margin-bottom: 30px; font-weight: 300; letter-spacing: 10px;
+            text-shadow: 0 0 30px #00f3ff;
+            text-transform: uppercase;
+        }
+        button {
+            padding: 15px 60px; font-size: 24px; background: transparent;
+            color: #ff0055; border: 2px solid #ff0055; cursor: pointer;
+            text-transform: uppercase; letter-spacing: 4px; transition: 0.3s;
+            border-radius: 4px;
+        }
+        button:hover { background: #ff0055; color: #fff; box-shadow: 0 0 40px #ff0055; }
+    </style>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+
+<body>
+    <video id="webcam" autoplay playsinline></video>
+
+    <div id="hud-layer">
+        <div id="tl-panel" class="panel">
+            <div class="label">SYSTEM STATUS</div>
+            <div class="value cyan">ONLINE</div>
+            <div class="label mt">PARTICLES</div>
+            <div class="value white">15,000 UNITS</div>
+            <div class="sub">FPS: 60 | SECTOR 7</div>
+        </div>
+
+        <div id="bl-panel" class="panel">
+            <div class="label">LEFT HAND [CONTROL]</div>
+            <div id="left-val" class="value pink">STANDBY</div>
+            <div class="sub">POINT: INTERACT | FIST: RESET</div>
+        </div>
+
+        <div id="br-panel">
+            <div class="label">RIGHT HAND [ACTION]</div>
+            <div id="right-val" class="value pink">STANDBY</div>
+            <div class="sub">1:CESAR 2:ERRERA 3:CURSO 4:VISÃO 5:ORB</div>
+        </div>
+    </div>
+
+    <div id="start-screen">
+        <h1>PROJETO CESAR</h1>
+        <button id="startButton">INICIAR</button>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+        import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+        import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
+        import { FilesetResolver, HandLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/+esm';
+
+        // --- SOM ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+           if (type === 'form') { 
+                osc.type = 'sine'; // Senoide
+                // Frequência bem baixa (Grave)
+                osc.frequency.setValueAtTime(50, audioCtx.currentTime); 
+                // Desce um pouco para dar sensação de "queda" ou peso
+                osc.frequency.linearRampToValueAtTime(30, audioCtx.currentTime + 1.5);
+                
+                // Volume: Entra suave e sai bem devagar
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0.6, audioCtx.currentTime + 0.2); // Sobe
+                gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 2.5); // Cauda longa
+            }
+            osc.connect(gainNode); gainNode.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + 1.5);
+        }
+
+        // --- CONFIGURAÇÃO ---
+        const PARTICLE_COUNT = 15000;
+        const TEXT_PARTICLE_LIMIT = 4000; 
+        const SURNAME_PARTICLE_LIMIT = 4500;
+        const COURSE_PARTICLE_LIMIT = 7000; 
+        const VISION_PARTICLE_LIMIT = 6000;
+        const SPHERE_RADIUS = 70;
+        const ATTRACTION_SPEED = 0.05; 
+        const FRICTION = 0.90;
+        const COLOR_SPEED = 0.08; 
+        const SNAP_SPEED = 0.12; 
+        
+        const INTERACTION_RADIUS = 35; 
+        const INTERACTION_FORCE = 80;
+
+        const GESTURE_HOLD_FRAMES = 8;
+        let gestureHoldCounter = 0;
+        let lastDetectedGesture = "UNKNOWN";
+        let confirmedGesture = "UNKNOWN";
+
+        let handLandmarker = undefined, particles, geometry;
+        let initialPositions, textPositions, surnamePositions, coursePositions, visionPositions, sphereLocalPositions;
+        let velocities, currentPositions, currentColors; 
+        let hasPlayedSound = false, systemStarted = false;
+        
+        let leftHandInteractionPos = null;
+
+        const leftVal = document.getElementById('left-val');
+        const rightVal = document.getElementById('right-val');
+
+        // --- CORES ---
+        const GOLD_COLOR = new THREE.Color(0xffaa00); 
+        const CYAN_COLOR = new THREE.Color(0x00ffff);
+        const GREEN_COLOR = new THREE.Color(0xffff00); // AMARELO NEON 
+        const BLACK_COLOR = new THREE.Color(0x000000);
+        const GALAXY_COLOR = new THREE.Color(0x6600ff); 
+        const SILVER_COLOR = new THREE.Color(0xCCCCCC); 
+        const MAGENTA_COLOR = new THREE.Color(0x39ff14); // VERDE
+
+        document.getElementById('startButton').addEventListener('click', async () => {
+            const overlay = document.getElementById('start-screen');
+            overlay.style.opacity = '0';
+            setTimeout(() => { overlay.style.display = 'none'; }, 800);
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            playSound('form');
+            systemStarted = true;
+            await setupWebcam();
+        });
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 150; 
+
+        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x000000, 0); 
+        document.body.appendChild(renderer.domElement);
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        const textureLoader = new THREE.TextureLoader();
+        const circleTexture = textureLoader.load('https://threejs.org/examples/textures/sprites/spark1.png');
+        const fontLoader = new FontLoader();
+
+        fontLoader.load('https://unpkg.com/three@0.160.0/examples/fonts/droid/droid_sans_bold.typeface.json', function (font) {
+            
+            // 1. NOME
+            const textGeo = new TextGeometry('CÉSAR', { font: font, size: 50, height: 2, curveSegments: 12 });
+            textGeo.computeBoundingBox();
+            textGeo.translate(- 0.5 * ( textGeo.boundingBox.max.x - textGeo.boundingBox.min.x ), 0, 0);
+            const textMesh = new THREE.Mesh(textGeo);
+            const textSampler = new MeshSurfaceSampler(textMesh).build();
+
+            // 2. SOBRENOME
+            const surnameGeo = new TextGeometry('ERRERA', { font: font, size: 50, height: 2, curveSegments: 12 });
+            surnameGeo.computeBoundingBox();
+            surnameGeo.translate(- 0.5 * ( surnameGeo.boundingBox.max.x - surnameGeo.boundingBox.min.x ), 0, 0);
+            const surnameMesh = new THREE.Mesh(surnameGeo);
+            const surnameSampler = new MeshSurfaceSampler(surnameMesh).build();
+
+            // 3. CURSO
+            const line1Geo = new TextGeometry('ENGENHARIA', { font: font, size: 20, height: 2, curveSegments: 12 });
+            line1Geo.computeBoundingBox();
+            line1Geo.translate(- 0.5 * (line1Geo.boundingBox.max.x - line1Geo.boundingBox.min.x), 30, 0); 
+            const line1Mesh = new THREE.Mesh(line1Geo);
+            const samplerL1 = new MeshSurfaceSampler(line1Mesh).build();
+
+            const line2Geo = new TextGeometry('DE', { font: font, size: 16, height: 2, curveSegments: 12 });
+            line2Geo.computeBoundingBox();
+            line2Geo.translate(- 0.5 * (line2Geo.boundingBox.max.x - line2Geo.boundingBox.min.x), 0, 0);
+            const line2Mesh = new THREE.Mesh(line2Geo);
+            const samplerL2 = new MeshSurfaceSampler(line2Mesh).build();
+
+            const line3Geo = new TextGeometry('COMPUTAÇÃO', { font: font, size: 20, height: 2, curveSegments: 12 });
+            line3Geo.computeBoundingBox();
+            line3Geo.translate(- 0.5 * (line3Geo.boundingBox.max.x - line3Geo.boundingBox.min.x), -30, 0); 
+            const line3Mesh = new THREE.Mesh(line3Geo);
+            const samplerL3 = new MeshSurfaceSampler(line3Mesh).build();
+
+            // 4. VISÃO COMPUTACIONAL
+            const vision1Geo = new TextGeometry('VISÃO', { font: font, size: 28, height: 2, curveSegments: 12 });
+            vision1Geo.computeBoundingBox();
+            vision1Geo.translate(- 0.5 * (vision1Geo.boundingBox.max.x - vision1Geo.boundingBox.min.x), 15, 0); 
+            const vision1Mesh = new THREE.Mesh(vision1Geo);
+            const samplerV1 = new MeshSurfaceSampler(vision1Mesh).build();
+
+            const vision2Geo = new TextGeometry('COMPUTACIONAL', { font: font, size: 25, height: 2, curveSegments: 12 });
+            vision2Geo.computeBoundingBox();
+            vision2Geo.translate(- 0.5 * (vision2Geo.boundingBox.max.x - vision2Geo.boundingBox.min.x), -20, 0); 
+            const vision2Mesh = new THREE.Mesh(vision2Geo);
+            const samplerV2 = new MeshSurfaceSampler(vision2Mesh).build();
+
+            // 5. ESFERA
+            const sphereGeo = new THREE.SphereGeometry(SPHERE_RADIUS, 60, 60);
+            const sphereMesh = new THREE.Mesh(sphereGeo);
+            const sphereSampler = new MeshSurfaceSampler(sphereMesh).build();
+
+            initialPositions = new Float32Array(PARTICLE_COUNT * 3);
+            textPositions = new Float32Array(PARTICLE_COUNT * 3);
+            surnamePositions = new Float32Array(PARTICLE_COUNT * 3);
+            coursePositions = new Float32Array(PARTICLE_COUNT * 3); 
+            visionPositions = new Float32Array(PARTICLE_COUNT * 3); 
+            sphereLocalPositions = new Float32Array(PARTICLE_COUNT * 3);
+            currentPositions = new Float32Array(PARTICLE_COUNT * 3);
+            currentColors = new Float32Array(PARTICLE_COUNT * 3);
+            velocities = new Float32Array(PARTICLE_COUNT * 3);
+
+            const tempVec = new THREE.Vector3();
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                initialPositions[i*3] = (Math.random() - 0.5) * 800;
+                initialPositions[i*3+1] = (Math.random() - 0.5) * 500;
+                initialPositions[i*3+2] = (Math.random() - 0.5) * 400;
+                
+                // Amostragem CESAR
+                if (i < TEXT_PARTICLE_LIMIT) {
+                    textSampler.sample(tempVec);
+                    textPositions[i*3] = tempVec.x; textPositions[i*3+1] = tempVec.y; textPositions[i*3+2] = tempVec.z;
+                } else {
+                    textPositions[i*3] = initialPositions[i*3]; textPositions[i*3+1] = initialPositions[i*3+1]; textPositions[i*3+2] = initialPositions[i*3+2];
+                }
+
+                 // Amostragem ERRERA
+                 if (i < SURNAME_PARTICLE_LIMIT) {
+                    surnameSampler.sample(tempVec);
+                    surnamePositions[i*3] = tempVec.x; surnamePositions[i*3+1] = tempVec.y; surnamePositions[i*3+2] = tempVec.z;
+                } else {
+                    surnamePositions[i*3] = initialPositions[i*3]; surnamePositions[i*3+1] = initialPositions[i*3+1]; surnamePositions[i*3+2] = initialPositions[i*3+2];
+                }
+
+                // Amostragem CURSO
+                if (i < COURSE_PARTICLE_LIMIT) {
+                    const randomLine = Math.random();
+                    if(randomLine < 0.45) samplerL1.sample(tempVec);
+                    else if (randomLine < 0.55) samplerL2.sample(tempVec);
+                    else samplerL3.sample(tempVec);
+                    coursePositions[i*3] = tempVec.x; coursePositions[i*3+1] = tempVec.y; coursePositions[i*3+2] = tempVec.z;
+                } else {
+                    coursePositions[i*3] = initialPositions[i*3]; coursePositions[i*3+1] = initialPositions[i*3+1]; coursePositions[i*3+2] = initialPositions[i*3+2];
+                }
+
+                // Amostragem VISÃO
+                if (i < VISION_PARTICLE_LIMIT) {
+                    if (Math.random() < 0.4) samplerV1.sample(tempVec);
+                    else samplerV2.sample(tempVec);
+                    visionPositions[i*3] = tempVec.x; visionPositions[i*3+1] = tempVec.y; visionPositions[i*3+2] = tempVec.z;
+                } else {
+                    visionPositions[i*3] = initialPositions[i*3]; visionPositions[i*3+1] = initialPositions[i*3+1]; visionPositions[i*3+2] = initialPositions[i*3+2];
+                }
+
+                // Amostragem Esfera
+                sphereSampler.sample(tempVec);
+                sphereLocalPositions[i*3] = tempVec.x; sphereLocalPositions[i*3+1] = tempVec.y; sphereLocalPositions[i*3+2] = tempVec.z;
+
+                currentPositions[i*3] = initialPositions[i*3]; currentPositions[i*3+1] = initialPositions[i*3+1]; currentPositions[i*3+2] = initialPositions[i*3+2];
+                currentColors[i*3] = GALAXY_COLOR.r; currentColors[i*3+1] = GALAXY_COLOR.g; currentColors[i*3+2] = GALAXY_COLOR.b;
+                velocities[i*3] = 0; velocities[i*3+1] = 0; velocities[i*3+2] = 0;
+            }
+
+            geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(currentColors, 3));
+
+            const material = new THREE.PointsMaterial({
+                vertexColors: true, 
+                size: 3.0, 
+                map: circleTexture, 
+                transparent: true, opacity: 1.0, blending: THREE.AdditiveBlending, depthWrite: false
+            });
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+            animate();
+        });
+
+        function detectHandState(landmarks) {
+            const indexUp = landmarks[8].y < landmarks[6].y;
+            const middleUp = landmarks[12].y < landmarks[10].y;
+            const middleFolded = landmarks[12].y > landmarks[9].y;
+            const ringUp = landmarks[16].y < landmarks[14].y; 
+            const ringDown = landmarks[16].y > landmarks[14].y;
+            const pinkyUp = landmarks[20].y < landmarks[18].y; 
+            const pinkyDown = landmarks[20].y > landmarks[18].y;
+            
+            // LÓGICA SIMPLIFICADA PARA O DEDÃO
+            // Se os 4 dedos estão levantados:
+            // A prioridade é "OPEN" (Esfera) para facilitar.
+            // Para fazer o "4" (Visão), o usuário precisa dobrar o dedão BEM para dentro.
+            // Se o dedão estiver "mais ou menos", consideramos Aberto.
+
+            const thumbTip = landmarks[4];
+            const pinkyBase = landmarks[17]; // Base do mindinho (na palma)
+            
+            // Distância do dedão até a base do mindinho (cruzando a palma)
+            const thumbFoldDist = Math.sqrt(Math.pow(thumbTip.x - pinkyBase.x, 2) + Math.pow(thumbTip.y - pinkyBase.y, 2));
+            
+            // Limite bem baixo: Dedão tem que estar MUITO perto da base do mindinho para ser "fechado"
+            const isThumbTucked = thumbFoldDist < 0.15; 
+
+            const isPointing = indexUp && middleFolded && ringDown && pinkyDown;
+            const isTwoFingers = indexUp && middleUp && ringDown && pinkyDown;
+            const isThreeFingers = indexUp && middleUp && ringUp && pinkyDown; 
+            
+            // Lógica dos 4 dedos principais levantados
+            const fourFingersUp = indexUp && middleUp && ringUp && pinkyUp;
+
+            if (fourFingersUp) {
+                if (isThumbTucked) {
+                    return "FOUR_FINGERS"; // Só retorna 4 se o dedão estiver realmente escondido
+                } else {
+                    return "OPEN"; // Caso contrário, assume que é 5 (Esfera) - Mais fácil de acionar
+                }
+            }
+            
+            if (isThreeFingers) return "THREE_FINGERS"; 
+            if (isTwoFingers) return "TWO_FINGERS"; 
+            if (isPointing) return "POINTING"; 
+            
+            const allClosed = landmarks[8].y > landmarks[6].y && landmarks[12].y > landmarks[10].y && landmarks[16].y > landmarks[14].y;
+            if (allClosed) return "CLOSED";
+            
+            return "UNKNOWN";
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if(!systemStarted || !particles) return;
+
+            const video = document.getElementById('webcam');
+            let controlHandState = "UNKNOWN"; 
+            let magicHandState = "UNKNOWN"; 
+            let magicHandPos = null;
+            leftHandInteractionPos = null;
+
+            if (handLandmarker && video.readyState >= 2) {
+                const results = handLandmarker.detectForVideo(video, Date.now());
+                for (let i = 0; i < results.handednesses.length; i++) {
+                    const label = results.handednesses[i][0].categoryName; 
+                    const lm = results.landmarks[i];
+                    
+                    if (label === 'Left') { 
+                        // MÃO DIREITA
+                        let rawGesture = detectHandState(lm);
+                        
+                        if (rawGesture === lastDetectedGesture) {
+                            gestureHoldCounter++;
+                        } else {
+                            gestureHoldCounter = 0;
+                            lastDetectedGesture = rawGesture;
+                        }
+
+                        if (gestureHoldCounter > GESTURE_HOLD_FRAMES) {
+                            confirmedGesture = rawGesture;
+                        }
+
+                        magicHandState = confirmedGesture; 
+
+                        const palmX = (lm[0].x + lm[5].x + lm[9].x + lm[13].x + lm[17].x) / 5;
+                        const palmY = (lm[0].y + lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 5;
+                        magicHandPos = new THREE.Vector3((palmX - 0.5) * -350, (palmY - 0.5) * -250, 0);
+                    } 
+                    else if (label === 'Right') { 
+                        // MÃO ESQUERDA
+                        controlHandState = detectHandState(lm);
+                        if (controlHandState !== "CLOSED") {
+                            leftHandInteractionPos = new THREE.Vector3(
+                                (lm[8].x - 0.5) * -350, 
+                                (lm[8].y - 0.5) * -250,
+                                0
+                            );
+                        }
+                    }
+                }
+            }
+
+            // HUD
+            if (controlHandState === "CLOSED") leftVal.innerText = "RESETTING";
+            else if (leftHandInteractionPos) leftVal.innerText = "INTERACT ACTIVE";
+            else leftVal.innerText = "STANDBY";
+
+            if (magicHandState === "POINTING") rightVal.innerText = "MODE: CYAN CESAR";
+            else if (magicHandState === "TWO_FINGERS") rightVal.innerText = "MODE: GREEN ERRERA";
+            else if (magicHandState === "THREE_FINGERS") rightVal.innerText = "MODE: SILVER COURSE"; 
+            else if (magicHandState === "FOUR_FINGERS") rightVal.innerText = "MODE: MAGENTA VISION"; 
+            else if (magicHandState === "OPEN") rightVal.innerText = "MODE: GOLD ORB";
+            else if (magicHandState === "CLOSED") rightVal.innerText = "MODE: RELEASE";
+            else rightVal.innerText = "MODE: SCATTER";
+
+            // Lógica
+            let mode = "GALAXY"; 
+            if (controlHandState === "CLOSED") { mode = "GALAXY"; }
+            else {
+                if (magicHandState === "POINTING") mode = "TEXT_CESAR";
+                else if (magicHandState === "TWO_FINGERS") mode = "TEXT_ERRERA";
+                else if (magicHandState === "THREE_FINGERS") mode = "TEXT_COURSE"; 
+                else if (magicHandState === "FOUR_FINGERS") mode = "TEXT_VISION"; 
+                else if (magicHandState === "OPEN" && magicHandPos) mode = "SPHERE";
+                else if (magicHandState === "CLOSED") mode = "GALAXY"; 
+                else mode = "GALAXY"; 
+            }
+
+            if ((mode.includes("TEXT") || mode === "SPHERE") && !hasPlayedSound) {
+                playSound('form'); hasPlayedSound = true;
+            } else if (mode === "GALAXY") { hasPlayedSound = false; }
+
+            // Física e Cor
+            const pos = geometry.attributes.position.array;
+            const cols = geometry.attributes.color.array; 
+            const time = Date.now() * 0.001;
+
+            if (mode === "GALAXY") particles.rotation.y += 0.001;
+            else particles.rotation.y += (0 - particles.rotation.y) * 0.1;
+
+            for(let i = 0; i < PARTICLE_COUNT; i++) {
+                const ix = i*3, iy = i*3+1, iz = i*3+2;
+                let targetColor, tx, ty, tz;
+                let useSnap = false;
+                
+                if (mode === "TEXT_CESAR") {
+                    useSnap = true;
+                    if (i < TEXT_PARTICLE_LIMIT) {
+                        targetColor = CYAN_COLOR;
+                        tx = textPositions[ix]; ty = textPositions[iy]; tz = textPositions[iz];
+                    } else {
+                        targetColor = BLACK_COLOR; tx = 0; ty = 0; tz = -5000;
+                    }
+                }
+                else if (mode === "TEXT_ERRERA") { 
+                    useSnap = true;
+                    if (i < SURNAME_PARTICLE_LIMIT) {
+                        targetColor = GREEN_COLOR;
+                        tx = surnamePositions[ix]; ty = surnamePositions[iy]; tz = surnamePositions[iz];
+                    } else {
+                        targetColor = BLACK_COLOR; tx = 0; ty = 0; tz = -5000;
+                    }
+                }
+                else if (mode === "TEXT_COURSE") {
+                    useSnap = true;
+                    if (i < COURSE_PARTICLE_LIMIT) {
+                        targetColor = SILVER_COLOR;
+                        tx = coursePositions[ix]; ty = coursePositions[iy]; tz = coursePositions[iz];
+                    } else {
+                        targetColor = BLACK_COLOR; tx = 0; ty = 0; tz = -5000;
+                    }
+                }
+                else if (mode === "TEXT_VISION") {
+                    useSnap = true;
+                    if (i < VISION_PARTICLE_LIMIT) {
+                        targetColor = MAGENTA_COLOR;
+                        tx = visionPositions[ix]; ty = visionPositions[iy]; tz = visionPositions[iz];
+                    } else {
+                        targetColor = BLACK_COLOR; tx = 0; ty = 0; tz = -5000;
+                    }
+                }
+                else if (mode === "SPHERE" && magicHandPos) {
+                    useSnap = true; 
+                    targetColor = GOLD_COLOR;
+                    const lx = sphereLocalPositions[ix]; const ly = sphereLocalPositions[iy]; const lz = sphereLocalPositions[iz];
+                    const cosT = Math.cos(time); const sinT = Math.sin(time);
+                    const rotX = lx * cosT - lz * sinT; const rotZ = lx * sinT + lz * cosT;
+                    tx = magicHandPos.x + rotX; ty = magicHandPos.y + ly; tz = magicHandPos.z + rotZ;
+                }
+                else { // GALAXY
+                    targetColor = GALAXY_COLOR; 
+                    tx = initialPositions[ix]; ty = initialPositions[iy]; tz = initialPositions[iz];
+                }
+
+                cols[ix] += (targetColor.r - cols[ix]) * COLOR_SPEED;
+                cols[iy] += (targetColor.g - cols[iy]) * COLOR_SPEED;
+                cols[iz] += (targetColor.b - cols[iz]) * COLOR_SPEED;
+
+                // --- INTERAÇÃO COM DEDO ESQUERDO ---
+                if (mode.includes("TEXT") && leftHandInteractionPos) { 
+                    const dx = tx - leftHandInteractionPos.x;
+                    const dy = ty - leftHandInteractionPos.y;
+                    const distSq = dx*dx + dy*dy;
+
+                    if (distSq < INTERACTION_RADIUS * INTERACTION_RADIUS) {
+                        const dist = Math.sqrt(distSq);
+                        const force = (INTERACTION_RADIUS - dist) / INTERACTION_RADIUS;
+                        const angle = Math.atan2(dy, dx);
+                        tx += Math.cos(angle) * force * INTERACTION_FORCE;
+                        ty += Math.sin(angle) * force * INTERACTION_FORCE;
+                        tz += force * 50;
+                    }
+                }
+
+                if (useSnap) {
+                    pos[ix] += (tx - pos[ix]) * SNAP_SPEED;
+                    pos[iy] += (ty - pos[iy]) * SNAP_SPEED;
+                    pos[iz] += (tz - pos[iz]) * SNAP_SPEED;
+                    velocities[ix] = 0; velocities[iy] = 0; velocities[iz] = 0;
+                } 
+                else {
+                    let speed = ATTRACTION_SPEED;
+                    if(mode === "GALAXY") speed *= 0.5;
+                    velocities[ix] += (tx - pos[ix]) * speed;
+                    velocities[iy] += (ty - pos[iy]) * speed;
+                    velocities[iz] += (tz - pos[iz]) * speed;
+                    velocities[ix] *= FRICTION; velocities[iy] *= FRICTION; velocities[iz] *= FRICTION;
+                    pos[ix] += velocities[ix]; pos[iy] += velocities[iy]; pos[iz] += velocities[iz];
+                }
+            }
+
+            geometry.attributes.position.needsUpdate = true;
+            geometry.attributes.color.needsUpdate = true;
+            renderer.render(scene, camera);
+        }
+
+        async function setupWebcam() {
+            try {
+                const video = document.getElementById('webcam');
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+            } catch (err) {
+                console.error("ERRO CAMERA:", err);
+            }
+        }
+
+        async function createHandLandmarker() {
+            const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`, delegate: "GPU" }, runningMode: "VIDEO", numHands: 2
+            });
+            console.log("IA PRONTA");
+        }
+        createHandLandmarker();
+    </script>
+</body>
+</html>
